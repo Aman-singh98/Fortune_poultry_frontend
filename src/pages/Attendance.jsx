@@ -68,6 +68,15 @@ const CATEGORY_OPTIONS = [
   { value: "ELECTRICIAN", label: "Electrician" },
 ];
 
+// True if an employee should show up (and be operable) for a given site —
+// their home site, an extra assigned site, or flagged visible everywhere.
+function employeeWorksAtSite(emp, siteId) {
+  if (!siteId) return false;
+  if (emp.allSites) return true;
+  if (emp.site?._id === siteId) return true;
+  return (emp.sites || []).some((s) => (s?._id || s) === siteId);
+}
+
 function categoryLabel(emp) {
   if (emp.employeeType === "PERMANENT") return "Permanent";
   const found = CATEGORY_OPTIONS.find((c) => c.value === emp.wagesSubCategory);
@@ -211,7 +220,7 @@ export default function Attendance() {
   // ---- Site Summary (all visible sites, always) --------------------------
   const siteSummaryRows = useMemo(() => {
     return sites.map((site) => {
-      const emps = allEmployees.filter((e) => e.site?._id === site._id);
+      const emps = allEmployees.filter((e) => employeeWorksAtSite(e, site._id));
       const dailyWage = emps.filter((e) => e.employeeType === "WAGES").length;
       const permanent = emps.filter((e) => e.employeeType === "PERMANENT").length;
       const records = attendanceRecords.filter((r) => r.site?._id === site._id);
@@ -232,7 +241,7 @@ export default function Attendance() {
 
   // ---- Mark Attendance panel employees ------------------------------------
   const panelEmployees = useMemo(() => {
-    let list = allEmployees.filter((e) => e.site?._id === panelSiteId);
+    let list = allEmployees.filter((e) => employeeWorksAtSite(e, panelSiteId));
     if (categoryFilter === "PERMANENT") {
       list = list.filter((e) => e.employeeType === "PERMANENT");
     } else if (categoryFilter) {
@@ -314,6 +323,7 @@ export default function Attendance() {
           return markAttendance({
             employee: emp._id,
             date,
+            site: panelSiteId,
             status: e.status,
             overtimeHours: Number(e.overtimeHours) || 0,
             remarks: e.remarks || "",

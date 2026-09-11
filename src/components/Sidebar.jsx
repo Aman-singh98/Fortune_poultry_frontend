@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   ClipboardCheck,
   Users,
+  HardHat,
   Wallet,
   Banknote,
   CalendarDays,
@@ -30,6 +31,7 @@ const HR_NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/attendance", label: "Attendance", icon: ClipboardCheck },
   { to: "/employees", label: "Employees", icon: Users },
+  { to: "/labour-wages", label: "Labour / Wages", icon: HardHat },
   { to: "/wage-master", label: "Wage master", icon: Wallet },
   { to: "/salary", label: "Salary", icon: Banknote },
   { to: "/leave", label: "Leave", icon: CalendarDays },
@@ -75,27 +77,27 @@ export default function Sidebar({ collapsed, mobileOpen, onCloseMobile }) {
       )}
 
       <aside
-        className={`fixed md:sticky top-0 left-0 h-screen z-40 flex flex-col bg-navy-900 text-navy-50
+        className={`fixed md:sticky top-0 left-0 h-screen z-40 flex flex-col bg-white text-navy-700 border-r border-navy-100
           transition-transform duration-200 md:transition-[width] md:duration-200
           w-60 ${collapsed ? "md:w-16" : "md:w-60"}
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}
         aria-label="Main navigation"
       >
-        <div className="flex items-center gap-2 px-4 h-16 border-b border-white/10 shrink-0">
+        <div className="flex items-center gap-2 px-4 h-16 border-b border-navy-100 shrink-0">
           <div className="h-8 w-8 rounded-lg bg-accent-500 flex items-center justify-center shrink-0">
             <Egg size={16} className="text-white" />
           </div>
-          <span className={`font-semibold tracking-wide text-sm whitespace-nowrap overflow-hidden ${collapsed ? "md:hidden" : ""}`}>
+          <span className={`font-semibold tracking-wide text-sm text-navy-700 whitespace-nowrap overflow-hidden ${collapsed ? "md:hidden" : ""}`}>
             Fortune Poultry
           </span>
         </div>
 
         <nav className="flex-1 py-3 px-2 space-y-1 overflow-y-auto">
           {navGroups.map((group, groupIdx) => (
-            <div key={group.heading || "hr"} className={groupIdx > 0 ? "pt-3 mt-3 border-t border-white/10" : ""}>
+            <div key={group.heading || "hr"} className={groupIdx > 0 ? "pt-3 mt-3 border-t border-navy-100" : ""}>
               {group.heading && (
                 <p
-                  className={`px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-navy-100/40 whitespace-nowrap overflow-hidden ${
+                  className={`px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-navy-300 whitespace-nowrap overflow-hidden ${
                     collapsed ? "md:hidden" : ""
                   }`}
                 >
@@ -115,8 +117,8 @@ export default function Sidebar({ collapsed, mobileOpen, onCloseMobile }) {
                     className={({ isActive }) =>
                       `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${
                         isActive
-                          ? "bg-accent-500/20 text-white font-medium"
-                          : "text-navy-100/70 hover:bg-white/5 hover:text-white"
+                          ? "bg-accent-100 text-accent-700 font-medium"
+                          : "text-navy-500 hover:bg-navy-50 hover:text-navy-700"
                       }`
                     }
                   >
@@ -129,11 +131,11 @@ export default function Sidebar({ collapsed, mobileOpen, onCloseMobile }) {
                     <span
                       role="tooltip"
                       className="hidden md:block absolute left-full top-1/2 -translate-y-1/2 ml-2 whitespace-nowrap
-                        rounded-md bg-navy-900 text-white text-xs font-medium px-2.5 py-1.5 shadow-lg border border-white/10 z-50
+                        rounded-md bg-navy-700 text-white text-xs font-medium px-2.5 py-1.5 shadow-lg z-50
                         pointer-events-none"
                     >
                       {label}
-                      <span className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-navy-900" />
+                      <span className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-navy-700" />
                     </span>
                   )}
                 </div>

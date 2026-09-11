@@ -35,6 +35,7 @@ export const markAllPresent = (payload) => api.post("/attendance/mark-all-presen
 export const getSalaries = (params = {}) => api.get("/salaries", { params });
 export const generateSalary = (payload) => api.post("/salaries/generate", payload);
 export const addSalaryDeduction = (id, payload) => api.post(`/salaries/${id}/deduction`, payload);
+export const addSalaryIncentive = (id, payload) => api.post(`/salaries/${id}/incentive`, payload);
 
 // --- Leave ---
 export const getLeaves = (params = {}) => api.get("/leaves", { params });

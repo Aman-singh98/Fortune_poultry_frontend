@@ -8,6 +8,7 @@ import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Attendance from "./pages/Attendance.jsx";
 import Employees from "./pages/Employees.jsx";
+import LabourWages from "./pages/LabourWages.jsx";
 import WageMaster from "./pages/WageMaster.jsx";
 import Salary from "./pages/Salary.jsx";
 import Leave from "./pages/Leave.jsx";
@@ -31,17 +32,16 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
-
           <Route element={<ProtectedRoute />}>
             <Route element={<DashboardLayout />}>
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/attendance" element={<Attendance />} />
               <Route path="/employees" element={<Employees />} />
+              <Route path="/labour-wages" element={<LabourWages />} />
               <Route path="/wage-master" element={<WageMaster />} />
               <Route path="/salary" element={<Salary />} />
               <Route path="/leave" element={<Leave />} />
               <Route path="/holidays" element={<Holidays />} />
-
               {/* Stock, Purchase & Inventory module — each page sits behind
                   a RoleRoute using the shared access list in constants/roleAccess.js,
                   the same list Sidebar.jsx uses to decide what to show in nav. */}
@@ -80,7 +80,6 @@ export default function App() {
               </Route>
             </Route>
           </Route>
-
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
