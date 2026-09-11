@@ -1154,7 +1154,6 @@ export default function Attendance() {
           </div>
         </div>
       </div>
-
     </div>
   );
 }
