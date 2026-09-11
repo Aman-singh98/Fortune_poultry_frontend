@@ -32,7 +32,6 @@ import { useSiteScope } from "../context/SiteScopeContext.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
 import {
-  getAttendanceSummary,
   getEmployees,
   getAttendance,
   markAttendance,
@@ -68,6 +67,23 @@ const CATEGORY_OPTIONS = [
   { value: "ELECTRICIAN", label: "Electrician" },
 ];
 
+// Wage-only subcategories, used to filter the Labour/Wages tab (no "Permanent" here —
+// that tab only ever contains WAGES employees).
+const LABOUR_CATEGORY_OPTIONS = [
+  { value: "", label: "All Categories" },
+  { value: "CONSTRUCTION_LABOUR", label: "Construction Labour" },
+  { value: "PAINTER", label: "Painter" },
+  { value: "MAINTENANCE", label: "Maintenance" },
+  { value: "ELECTRICIAN", label: "Electrician" },
+];
+
+// The three tabs inside the Attendance section.
+const ATTENDANCE_TABS = [
+  { key: "EMPLOYEE", label: "Employee Attendance", icon: UserRound },
+  { key: "LABOUR", label: "Labour / Wages Attendance", icon: Users },
+  { key: "SUMMARY", label: "Site Summary", icon: Building2 },
+];
+
 // True if an employee should show up (and be operable) for a given site —
 // their home site, an extra assigned site, or flagged visible everywhere.
 function employeeWorksAtSite(emp, siteId) {
@@ -81,6 +97,13 @@ function categoryLabel(emp) {
   if (emp.employeeType === "PERMANENT") return "Permanent";
   const found = CATEGORY_OPTIONS.find((c) => c.value === emp.wagesSubCategory);
   return found ? found.label : "Daily Wage";
+}
+
+// Employees show their employeeCode (falls back to labourId if not set); labour/wages
+// workers always show their labourId — matching how the Employees / Labour-Wages
+// directories already display each type.
+function idLabel(emp) {
+  return emp.employeeType === "PERMANENT" ? emp.employeeCode || emp.labourId : emp.labourId;
 }
 
 function initials(name = "?") {
@@ -144,17 +167,23 @@ export default function Attendance() {
   const toast = useToast();
 
   const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
-  const [summary, setSummary] = useState(null);
   const [allEmployees, setAllEmployees] = useState([]);
   const [attendanceRecords, setAttendanceRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Which of the three tabs is active: Employee Attendance, Labour/Wages
+  // Attendance, or Site Summary.
+  const [activeTab, setActiveTab] = useState("EMPLOYEE");
 
   // Mark-attendance panel controls
   const [panelSiteId, setPanelSiteId] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [search, setSearch] = useState("");
   const [edits, setEdits] = useState({}); // employeeId -> { status, overtimeHours, remarks }
+  // employeeId -> true once the admin has explicitly changed that row in this
+  // session (as opposed to it merely being pre-filled from an existing record).
+  const [touched, setTouched] = useState({});
   const [remarksOpenFor, setRemarksOpenFor] = useState(null);
   const [dirty, setDirty] = useState(false);
 
@@ -164,8 +193,6 @@ export default function Attendance() {
   const [calendarRecords, setCalendarRecords] = useState([]);
   const [selectedDay, setSelectedDay] = useState(null);
   const [calendarLoading, setCalendarLoading] = useState(false);
-
-  const siteParam = isSuperAdmin && selectedSiteId ? { site: selectedSiteId } : {};
 
   // Default the panel's site once sites are known.
   useEffect(() => {
@@ -177,12 +204,10 @@ export default function Attendance() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [summaryRes, employeesRes, attendanceRes] = await Promise.all([
-        getAttendanceSummary({ ...siteParam, date }),
+      const [employeesRes, attendanceRes] = await Promise.all([
         getEmployees({}),
         getAttendance({ date }),
       ]);
-      setSummary(summaryRes.data.data);
       setAllEmployees(employeesRes.data.data);
       setAttendanceRecords(attendanceRes.data.data);
       setDirty(false);
@@ -209,6 +234,7 @@ export default function Attendance() {
       };
     }
     setEdits(map);
+    setTouched({}); // fresh data load — nothing has been explicitly edited yet
   }, [attendanceRecords]);
 
   useEffect(() => {
@@ -239,49 +265,98 @@ export default function Attendance() {
     });
   }, [sites, allEmployees, attendanceRecords]);
 
+  // Which site each employee's *existing* attendance record for this date actually
+  // belongs to. An employee can only have ONE attendance record per day (the model
+  // enforces employee+date uniqueness) — someone assigned to multiple sites/allSites
+  // is therefore "present" on that one record, not separately per site. This map lets
+  // the panel show *where* that record was marked, instead of letting it look like a
+  // fresh entry for whichever site tab happens to be open.
+  const attendanceSiteByEmployee = useMemo(() => {
+    const map = {};
+    for (const r of attendanceRecords) {
+      const empId = r.employee?._id;
+      if (empId) map[empId] = r.site;
+    }
+    return map;
+  }, [attendanceRecords]);
+
   // ---- Mark Attendance panel employees ------------------------------------
+  // Scoped to whichever tab is active: PERMANENT staff for Employee
+  // Attendance, WAGES labour for Labour/Wages Attendance.
   const panelEmployees = useMemo(() => {
     let list = allEmployees.filter((e) => employeeWorksAtSite(e, panelSiteId));
-    if (categoryFilter === "PERMANENT") {
+    if (activeTab === "EMPLOYEE") {
       list = list.filter((e) => e.employeeType === "PERMANENT");
-    } else if (categoryFilter) {
-      list = list.filter((e) => e.wagesSubCategory === categoryFilter);
+    } else if (activeTab === "LABOUR") {
+      list = list.filter((e) => e.employeeType === "WAGES");
+      if (categoryFilter) list = list.filter((e) => e.wagesSubCategory === categoryFilter);
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(
-        (e) => e.name.toLowerCase().includes(q) || e.labourId.toLowerCase().includes(q)
+        (e) =>
+          e.name.toLowerCase().includes(q) ||
+          (e.labourId || "").toLowerCase().includes(q) ||
+          (e.employeeCode || "").toLowerCase().includes(q)
       );
     }
     return list;
-  }, [allEmployees, panelSiteId, categoryFilter, search]);
+  }, [allEmployees, panelSiteId, activeTab, categoryFilter, search]);
 
   const siteSummaryPagination = usePagination(siteSummaryRows, 10);
   const panelPagination = usePagination(panelEmployees, 10);
   useEffect(() => {
     panelPagination.setPage(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panelSiteId, categoryFilter, search, date]);
+  }, [panelSiteId, activeTab, categoryFilter, search, date]);
+
+  // Switching tabs clears filters that don't apply to the new tab.
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    setCategoryFilter("");
+    setSearch("");
+  };
 
   const updateEdit = (employeeId, patch) => {
     setEdits((prev) => ({
       ...prev,
       [employeeId]: { status: "PRESENT", overtimeHours: 0, remarks: "", ...prev[employeeId], ...patch },
     }));
+    setTouched((prev) => ({ ...prev, [employeeId]: true }));
     setDirty(true);
   };
 
   const handleMarkAllPresent = () => {
     if (!panelEmployees.length) return;
+    // Skip anyone already recorded present/absent/etc. at a *different* site today —
+    // bulk-marking them present here would wrongly overwrite that other record.
+    const targets = panelEmployees.filter((emp) => {
+      const existingSite = attendanceSiteByEmployee[emp._id]?._id;
+      return !existingSite || existingSite === panelSiteId;
+    });
+    if (!targets.length) {
+      toast.info("Everyone here is already marked at another site today.");
+      return;
+    }
     setEdits((prev) => {
       const next = { ...prev };
-      for (const emp of panelEmployees) {
+      for (const emp of targets) {
         next[emp._id] = { ...(next[emp._id] || { overtimeHours: 0, remarks: "" }), status: "PRESENT" };
       }
       return next;
     });
+    setTouched((prev) => {
+      const next = { ...prev };
+      for (const emp of targets) next[emp._id] = true;
+      return next;
+    });
     setDirty(true);
-    toast.info("Marked all present below — click Save Attendance to confirm.");
+    const skipped = panelEmployees.length - targets.length;
+    toast.info(
+      skipped > 0
+        ? `Marked ${targets.length} present (${skipped} already marked at another site) — click Save Attendance to confirm.`
+        : "Marked all present below — click Save Attendance to confirm."
+    );
   };
 
   const handleCopyYesterday = async () => {
@@ -295,13 +370,26 @@ export default function Attendance() {
         const next = { ...prev };
         for (const emp of panelEmployees) {
           const y = byEmp[emp._id];
-          if (y) {
-            next[emp._id] = {
-              status: y.status,
-              overtimeHours: y.overtimeHours || 0,
-              remarks: next[emp._id]?.remarks || "",
-            };
-          }
+          if (!y) continue;
+          // Don't clobber a record already marked for this employee at another site today.
+          const existingSite = attendanceSiteByEmployee[emp._id]?._id;
+          if (existingSite && existingSite !== panelSiteId) continue;
+          next[emp._id] = {
+            status: y.status,
+            overtimeHours: y.overtimeHours || 0,
+            remarks: next[emp._id]?.remarks || "",
+          };
+        }
+        return next;
+      });
+      setTouched((prev) => {
+        const next = { ...prev };
+        for (const emp of panelEmployees) {
+          const y = byEmp[emp._id];
+          if (!y) continue;
+          const existingSite = attendanceSiteByEmployee[emp._id]?._id;
+          if (existingSite && existingSite !== panelSiteId) continue;
+          next[emp._id] = true;
         }
         return next;
       });
@@ -320,6 +408,15 @@ export default function Attendance() {
         panelEmployees.map((emp) => {
           const e = edits[emp._id];
           if (!e?.status) return Promise.resolve();
+          // This employee already has an attendance record for this date, marked
+          // against a different site (they're visible here too because they're
+          // assigned to multiple sites / all sites). Don't silently move that
+          // record to this site unless the admin actually edited this row —
+          // otherwise just clicking "Save Attendance" here would reassign
+          // people who were correctly marked elsewhere.
+          const existingSite = attendanceSiteByEmployee[emp._id]?._id;
+          const isForeignRecord = existingSite && existingSite !== panelSiteId;
+          if (isForeignRecord && !touched[emp._id]) return Promise.resolve();
           return markAttendance({
             employee: emp._id,
             date,
@@ -359,6 +456,14 @@ export default function Attendance() {
     loadCalendar();
   }, [loadCalendar]);
 
+  // Also refresh the calendar whenever the main attendance list changes (e.g. after
+  // switching the top date picker, or after loadAll() re-runs) — otherwise the
+  // calendar can keep showing stale data for the employee currently selected in it.
+  useEffect(() => {
+    loadCalendar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attendanceRecords]);
+
   useEffect(() => {
     // Default the detail panel to the record matching the top date picker, if in view.
     const match = calendarRecords.find((r) => format(parseISO(r.date), "yyyy-MM-dd") === date);
@@ -380,27 +485,60 @@ export default function Attendance() {
 
   const selectedDayRecord = selectedDay ? recordForDay(selectedDay) : null;
 
-  // ---- Stat cards ------------------------------------------------------
-  const stats = [
-    { icon: Building2, label: "Total Sites", value: summary?.totalSites ?? "-", sub: "Active Sites", iconBg: "bg-blue-100", iconColor: "text-blue-600" },
-    { icon: Users, label: "Total Labour", value: summary?.totalLabour ?? "-", sub: "All Workers", iconBg: "bg-purple-100", iconColor: "text-purple-600" },
-    { icon: CheckCircle2, label: "Present Today", value: summary?.presentToday ?? "-", sub: `${pct(summary?.presentToday || 0, summary?.totalLabour || 0)}%`, iconBg: "bg-green-100", iconColor: "text-green-600" },
-    { icon: XCircle, label: "Absent", value: summary?.absent ?? "-", sub: `${pct(summary?.absent || 0, summary?.totalLabour || 0)}%`, iconBg: "bg-red-100", iconColor: "text-red-600" },
-    { icon: Umbrella, label: "Leave", value: summary?.leave ?? "-", sub: `${pct(summary?.leave || 0, summary?.totalLabour || 0)}%`, iconBg: "bg-amber-100", iconColor: "text-amber-600" },
-    { icon: Clock, label: "Overtime", value: summary?.overtimeHours ?? "-", sub: "Hours Today", iconBg: "bg-sky-100", iconColor: "text-sky-600" },
-    { icon: Users, label: "P x 2 (Double)", value: summary?.presentX2 ?? "-", sub: "Workers", iconBg: "bg-purple-100", iconColor: "text-purple-600" },
-    { icon: UserRound, label: "P / 2 (Half Day)", value: summary?.presentHalf ?? "-", sub: "Workers", iconBg: "bg-teal-100", iconColor: "text-teal-600" },
-  ];
+  // ---- Employee vs Labour breakdown ---------------------------------------
+  // Scoped the same way the backend summary is: to the selected site when a
+  // super admin has one chosen, otherwise every site the user can see. Built
+  // locally (rather than from the combined backend summary) so Employee and
+  // Labour/Wages numbers are always shown separately, not lumped together.
+  const dashboardEmployees = useMemo(() => {
+    if (isSuperAdmin && selectedSiteId) {
+      return allEmployees.filter((e) => employeeWorksAtSite(e, selectedSiteId));
+    }
+    return allEmployees;
+  }, [allEmployees, isSuperAdmin, selectedSiteId]);
 
-  // ---- Donut breakdown ---------------------------------------------------
+  const dashboardRecords = useMemo(() => {
+    if (isSuperAdmin && selectedSiteId) {
+      return attendanceRecords.filter((r) => r.site?._id === selectedSiteId);
+    }
+    return attendanceRecords;
+  }, [attendanceRecords, isSuperAdmin, selectedSiteId]);
+
+  function buildTypeStats(type) {
+    const emps = dashboardEmployees.filter((e) => e.employeeType === type && e.isActive !== false);
+    const empIds = new Set(emps.map((e) => e._id));
+    const recs = dashboardRecords.filter((r) => r.employee?._id && empIds.has(r.employee._id));
+    return {
+      total: emps.length,
+      present: recs.filter((r) => r.status === "PRESENT").length,
+      absent: recs.filter((r) => r.status === "ABSENT").length,
+      leave: recs.filter((r) => r.status === "LEAVE").length,
+      overtimeHours: recs.reduce((sum, r) => sum + (r.overtimeHours || 0), 0),
+      presentX2: recs.filter((r) => r.status === "PRESENT_X2").length,
+      presentHalf: recs.filter((r) => r.status === "PRESENT_HALF").length,
+    };
+  }
+
+  const employeeStats = useMemo(() => buildTypeStats("PERMANENT"), [dashboardEmployees, dashboardRecords]);
+  const labourStats = useMemo(() => buildTypeStats("WAGES"), [dashboardEmployees, dashboardRecords]);
+
+  // Total Sites — pulled straight from the live site list (SiteScopeContext),
+  // the same source of truth the Employee/Labour counts above are built from,
+  // instead of the backend summary's "distinct sites with an attendance record
+  // today" figure (which read 0 on days nothing had been marked yet, and never
+  // reflected sites being added or removed). Scoped to 1 when a super admin has
+  // a single site selected, matching how the Employee/Labour cards scope too.
+  const totalSitesDisplay = isSuperAdmin && selectedSiteId ? 1 : sites.length;
+
+  // ---- Donut breakdown (combined, across both employee & labour) ----------
   const donutData = [
-    { key: "PRESENT", name: "Present", value: summary?.presentToday || 0 },
-    { key: "ABSENT", name: "Absent", value: summary?.absent || 0 },
-    { key: "LEAVE", name: "Leave", value: summary?.leave || 0 },
-    { key: "PRESENT_X2", name: "Present x 2", value: summary?.presentX2 || 0 },
-    { key: "PRESENT_HALF", name: "Present / 2", value: summary?.presentHalf || 0 },
+    { key: "PRESENT", name: "Present", value: employeeStats.present + labourStats.present },
+    { key: "ABSENT", name: "Absent", value: employeeStats.absent + labourStats.absent },
+    { key: "LEAVE", name: "Leave", value: employeeStats.leave + labourStats.leave },
+    { key: "PRESENT_X2", name: "Present x 2", value: employeeStats.presentX2 + labourStats.presentX2 },
+    { key: "PRESENT_HALF", name: "Present / 2", value: employeeStats.presentHalf + labourStats.presentHalf },
   ].filter((d) => d.value > 0);
-  const donutTotal = summary?.totalLabour || 0;
+  const donutTotal = employeeStats.total + labourStats.total;
 
   return (
     <div className="space-y-6">
@@ -418,12 +556,166 @@ export default function Attendance() {
         />
       </div>
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {loading ? <SkeletonStatCards count={8} /> : stats.map((s) => <StatCard key={s.label} {...s} />)}
+      {/* Stat cards — Employees and Labour/Wages shown separately */}
+      {loading ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <SkeletonStatCards count={4} />
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <StatCard
+            icon={Building2}
+            label="Total Sites"
+            value={totalSitesDisplay}
+            sub="Active Sites"
+            iconBg="bg-blue-100"
+            iconColor="text-blue-600"
+          />
+          <StatCard
+            icon={UserRound}
+            label="Total Employees"
+            value={employeeStats.total}
+            sub="Permanent Staff"
+            iconBg="bg-indigo-100"
+            iconColor="text-indigo-600"
+          />
+          <StatCard
+            icon={Users}
+            label="Total Labour"
+            value={labourStats.total}
+            sub="Wages Workers"
+            iconBg="bg-purple-100"
+            iconColor="text-purple-600"
+          />
+          <StatCard
+            icon={Clock}
+            label="Overtime"
+            value={employeeStats.overtimeHours + labourStats.overtimeHours}
+            sub="Hours Today (All)"
+            iconBg="bg-sky-100"
+            iconColor="text-sky-600"
+          />
+        </div>
+      )}
+
+      {/* Employee attendance breakdown */}
+      <div>
+        <p className="text-xs font-semibold text-navy-400 uppercase tracking-wide mb-2">
+          Employees — Today's Attendance
+        </p>
+        {loading ? (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <SkeletonStatCards count={4} />
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <StatCard
+              icon={CheckCircle2}
+              label="Present Today"
+              value={employeeStats.present}
+              sub={`${pct(employeeStats.present, employeeStats.total)}%`}
+              iconBg="bg-green-100"
+              iconColor="text-green-600"
+            />
+            <StatCard
+              icon={XCircle}
+              label="Absent"
+              value={employeeStats.absent}
+              sub={`${pct(employeeStats.absent, employeeStats.total)}%`}
+              iconBg="bg-red-100"
+              iconColor="text-red-600"
+            />
+            <StatCard
+              icon={Umbrella}
+              label="Leave"
+              value={employeeStats.leave}
+              sub={`${pct(employeeStats.leave, employeeStats.total)}%`}
+              iconBg="bg-amber-100"
+              iconColor="text-amber-600"
+            />
+            <StatCard
+              icon={Clock}
+              label="Overtime"
+              value={employeeStats.overtimeHours}
+              sub="Hours Today"
+              iconBg="bg-sky-100"
+              iconColor="text-sky-600"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Labour/Wages attendance breakdown */}
+      <div>
+        <p className="text-xs font-semibold text-navy-400 uppercase tracking-wide mb-2">
+          Labour / Wages — Today's Attendance
+        </p>
+        {loading ? (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <SkeletonStatCards count={4} />
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <StatCard
+              icon={CheckCircle2}
+              label="Present Today"
+              value={labourStats.present}
+              sub={`${pct(labourStats.present, labourStats.total)}%`}
+              iconBg="bg-green-100"
+              iconColor="text-green-600"
+            />
+            <StatCard
+              icon={XCircle}
+              label="Absent"
+              value={labourStats.absent}
+              sub={`${pct(labourStats.absent, labourStats.total)}%`}
+              iconBg="bg-red-100"
+              iconColor="text-red-600"
+            />
+            <StatCard
+              icon={Umbrella}
+              label="Leave"
+              value={labourStats.leave}
+              sub={`${pct(labourStats.leave, labourStats.total)}%`}
+              iconBg="bg-amber-100"
+              iconColor="text-amber-600"
+            />
+            <StatCard
+              icon={UserRound}
+              label="P x2 / Half Day"
+              value={`${labourStats.presentX2} / ${labourStats.presentHalf}`}
+              sub="Double / Half Day"
+              iconBg="bg-teal-100"
+              iconColor="text-teal-600"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Tabs: Employee Attendance / Labour-Wages Attendance / Site Summary */}
+      <div className="flex items-center gap-1 bg-navy-50/70 p-1 rounded-xl w-fit max-w-full overflow-x-auto">
+        {ATTENDANCE_TABS.map((tab) => {
+          const Icon = tab.icon;
+          const active = activeTab === tab.key;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => handleTabChange(tab.key)}
+              className={`flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg whitespace-nowrap transition-colors ${
+                active
+                  ? "bg-white text-navy-700 shadow-sm font-medium"
+                  : "text-navy-400 hover:text-navy-600"
+              }`}
+            >
+              <Icon size={15} />
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* Site summary */}
+      {activeTab === "SUMMARY" && (
       <div className="bg-white rounded-xl border border-navy-100 overflow-hidden flex flex-col">
         <div className="px-4 py-3 border-b border-navy-100">
           <h2 className="text-sm font-semibold text-navy-700">Site Summary (Today)</h2>
@@ -474,11 +766,15 @@ export default function Attendance() {
           itemLabel="sites"
         />
       </div>
+      )}
 
       {/* Mark attendance — full width */}
+      {activeTab !== "SUMMARY" && (
       <div className="bg-white rounded-xl border border-navy-100 overflow-hidden flex flex-col">
           <div className="px-4 py-3 border-b border-navy-100 flex flex-wrap items-center gap-2 justify-between">
-            <h2 className="text-sm font-semibold text-navy-700 whitespace-nowrap">Mark Attendance — {date}</h2>
+            <h2 className="text-sm font-semibold text-navy-700 whitespace-nowrap">
+              Mark {activeTab === "EMPLOYEE" ? "Employee" : "Labour / Wages"} Attendance — {date}
+            </h2>
             <div className="flex flex-wrap items-center gap-2">
               {isSuperAdmin ? (
                 <Select
@@ -493,23 +789,25 @@ export default function Attendance() {
                   ))}
                 </Select>
               ) : null}
-              <Select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                size="sm"
-              >
-                {CATEGORY_OPTIONS.map((c) => (
-                  <option key={c.value} value={c.value}>
-                    {c.label}
-                  </option>
-                ))}
-              </Select>
+              {activeTab === "LABOUR" && (
+                <Select
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  size="sm"
+                >
+                  {LABOUR_CATEGORY_OPTIONS.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
+                </Select>
+              )}
               <div className="relative">
                 <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-navy-300" />
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search labour..."
+                  placeholder={activeTab === "EMPLOYEE" ? "Search employee..." : "Search labour..."}
                   className="text-xs border border-navy-100 rounded-lg pl-7 pr-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-accent-500 w-32 sm:w-40"
                 />
               </div>
@@ -521,9 +819,13 @@ export default function Attendance() {
               <thead>
                 <tr className="text-left text-navy-300 border-b border-navy-100">
                   <th className="px-4 py-2 font-medium"></th>
-                  <th className="px-4 py-2 font-medium">Labour ID</th>
+                  <th className="px-4 py-2 font-medium">
+                    {activeTab === "EMPLOYEE" ? "Employee Code" : "Labour ID"}
+                  </th>
                   <th className="px-4 py-2 font-medium">Name</th>
-                  <th className="px-4 py-2 font-medium">Category</th>
+                  <th className="px-4 py-2 font-medium">
+                    {activeTab === "EMPLOYEE" ? "Designation" : "Category"}
+                  </th>
                   <th className="px-4 py-2 font-medium">Attendance</th>
                   <th className="px-4 py-2 font-medium">OT (Hrs)</th>
                   <th className="px-4 py-2 font-medium">Remarks</th>
@@ -536,7 +838,7 @@ export default function Attendance() {
                     <td colSpan={7}>
                       <EmptyState
                         icon={ClipboardList}
-                        title="No employees match these filters."
+                        title={`No ${activeTab === "EMPLOYEE" ? "employees" : "labour"} match these filters.`}
                         description="Try a different category or search term, or pick another site."
                       />
                     </td>
@@ -546,17 +848,28 @@ export default function Attendance() {
                   panelPagination.pageItems.map((emp) => {
                     const e = edits[emp._id] || {};
                     const meta = STATUS_META[e.status];
+                    const recordSite = attendanceSiteByEmployee[emp._id];
+                    const markedElsewhere =
+                      recordSite && panelSiteId && recordSite._id !== panelSiteId && !touched[emp._id];
                     return (
                       <tr key={emp._id} className="border-b border-navy-50 last:border-0">
                         <td className="px-4 py-2">
                           <Avatar name={emp.name} photoUrl={emp.photoUrl} />
                         </td>
-                        <td className="px-4 py-2 font-mono text-xs text-navy-500 whitespace-nowrap">{emp.labourId}</td>
+                        <td className="px-4 py-2 font-mono text-xs text-navy-500 whitespace-nowrap">
+                          {idLabel(emp)}
+                        </td>
                         <td className="px-4 py-2 text-navy-700 whitespace-nowrap">{emp.name}</td>
                         <td className="px-4 py-2">
-                          <span className="inline-block text-xs px-2 py-0.5 rounded-full bg-navy-50 text-navy-500 whitespace-nowrap">
-                            {categoryLabel(emp)}
-                          </span>
+                          {activeTab === "EMPLOYEE" ? (
+                            <span className="text-xs text-navy-500 whitespace-nowrap">
+                              {emp.designation || "—"}
+                            </span>
+                          ) : (
+                            <span className="inline-block text-xs px-2 py-0.5 rounded-full bg-navy-50 text-navy-500 whitespace-nowrap">
+                              {categoryLabel(emp)}
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-2">
                           <Select
@@ -574,6 +887,11 @@ export default function Attendance() {
                               </option>
                             ))}
                           </Select>
+                          {markedElsewhere && (
+                            <p className="text-[10px] text-amber-600 mt-1 whitespace-nowrap">
+                              Marked at {recordSite.name} today
+                            </p>
+                          )}
                         </td>
                         <td className="px-4 py-2">
                           <input
@@ -616,7 +934,7 @@ export default function Attendance() {
             pageSize={panelPagination.pageSize}
             total={panelPagination.total}
             onPageChange={panelPagination.setPage}
-            itemLabel="employees"
+            itemLabel={activeTab === "EMPLOYEE" ? "employees" : "labour"}
           />
 
           <div className="px-4 py-3 border-t border-navy-100 flex flex-wrap items-center justify-between gap-2">
@@ -645,6 +963,7 @@ export default function Attendance() {
             </button>
           </div>
       </div>
+      )}
 
       {/* Calendar + Overview */}
       <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
@@ -653,7 +972,7 @@ export default function Attendance() {
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <h2 className="text-sm font-semibold text-navy-700">
               Attendance Calendar
-              {calendarEmployee ? ` — ${calendarEmployee.name} (${calendarEmployee.labourId})` : ""}
+              {calendarEmployee ? ` — ${calendarEmployee.name} (${idLabel(calendarEmployee)})` : ""}
             </h2>
             <Select
               value={calendarEmployeeId}
@@ -662,7 +981,7 @@ export default function Attendance() {
             >
               {allEmployees.map((e) => (
                 <option key={e._id} value={e._id}>
-                  {e.name} ({e.labourId})
+                  {e.name} ({idLabel(e)})
                 </option>
               ))}
             </Select>
@@ -798,11 +1117,11 @@ export default function Attendance() {
 
             <div className="w-full mt-4 space-y-1.5">
               {[
-                { key: "PRESENT", value: summary?.presentToday || 0 },
-                { key: "ABSENT", value: summary?.absent || 0 },
-                { key: "LEAVE", value: summary?.leave || 0 },
-                { key: "PRESENT_X2", value: summary?.presentX2 || 0 },
-                { key: "PRESENT_HALF", value: summary?.presentHalf || 0 },
+                { key: "PRESENT", value: employeeStats.present + labourStats.present },
+                { key: "ABSENT", value: employeeStats.absent + labourStats.absent },
+                { key: "LEAVE", value: employeeStats.leave + labourStats.leave },
+                { key: "PRESENT_X2", value: employeeStats.presentX2 + labourStats.presentX2 },
+                { key: "PRESENT_HALF", value: employeeStats.presentHalf + labourStats.presentHalf },
               ].map((row) => (
                 <div key={row.key} className="flex items-center justify-between text-xs">
                   <span className="flex items-center gap-1.5 text-navy-500">
@@ -821,7 +1140,9 @@ export default function Attendance() {
                   Overtime
                 </span>
                 <span className="flex items-center gap-2">
-                  <span className="text-navy-700 font-medium">{summary?.overtimeHours || 0}</span>
+                  <span className="text-navy-700 font-medium">
+                    {employeeStats.overtimeHours + labourStats.overtimeHours}
+                  </span>
                   <span className="text-navy-300 w-10 text-right">Hrs</span>
                 </span>
               </div>

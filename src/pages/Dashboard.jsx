@@ -74,7 +74,7 @@ function StatCard({ icon: Icon, label, value }) {
 
 export default function Dashboard() {
   const { user } = useAuth();
-  const { selectedSiteId, isSuperAdmin } = useSiteScope();
+  const { selectedSiteId, isSuperAdmin, sites } = useSiteScope();
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -145,7 +145,11 @@ export default function Dashboard() {
   }, [load, loadLowStock, loadApprovals]);
 
   const stats = [
-    { icon: Building2, label: "Total sites", value: summary?.totalSites ?? "-" },
+    // Pulled straight from the live site list (SiteScopeContext) instead of the
+    // backend summary's "distinct sites with an attendance record today" figure,
+    // so it always matches reality — including sites just added or removed —
+    // the same way Total labour below reflects the current employee/labour data.
+    { icon: Building2, label: "Total sites", value: isSuperAdmin && selectedSiteId ? 1 : sites.length },
     { icon: Users, label: "Total labour", value: summary?.totalLabour ?? "-" },
     { icon: CheckCircle2, label: "Present today", value: summary?.presentToday ?? "-" },
     { icon: XCircle, label: "Absent", value: summary?.absent ?? "-" },
