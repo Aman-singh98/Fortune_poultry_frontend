@@ -8,9 +8,14 @@ import { SkeletonTableRows } from "../components/ui/Skeleton.jsx";
 import EmptyState from "../components/ui/EmptyState.jsx";
 import Select from "../components/ui/Select.jsx";
 import Pagination from "../components/ui/Pagination.jsx";
+import Tabs from "../components/ui/Tabs.jsx";
 import usePagination from "../hooks/usePagination.js";
 import StatusBadge from "../components/StatusBadge.jsx";
 
+const EMPLOYEE_TYPE_TABS = [
+  { value: "PERMANENT", label: "Employee" },
+  { value: "WAGES", label: "Wages & Labour" },
+];
 
 function currentMonthYear() {
   const now = new Date();
@@ -27,6 +32,7 @@ export default function Leave() {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("");
+  const [employeeTypeTab, setEmployeeTypeTab] = useState("PERMANENT");
   const [requestOpen, setRequestOpen] = useState(false);
   const [decidingId, setDecidingId] = useState(null);
 
@@ -37,7 +43,9 @@ export default function Leave() {
     try {
       const [leaveRes, empRes] = await Promise.all([
         getLeaves({ ...siteParam, status: statusFilter || undefined }),
-        !isSuperAdmin ? getEmployees(siteParam) : Promise.resolve({ data: { data: [] } }),
+        !isSuperAdmin
+          ? getEmployees({ ...siteParam, employeeType: employeeTypeTab })
+          : Promise.resolve({ data: { data: [] } }),
       ]);
       setLeaves(leaveRes.data.data);
       setEmployees(empRes.data.data);
@@ -45,16 +53,20 @@ export default function Leave() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSiteId, statusFilter, isSuperAdmin]);
+  }, [selectedSiteId, statusFilter, isSuperAdmin, employeeTypeTab]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const { page, setPage, pageItems, pageSize, total } = usePagination(leaves, 10);
+  // Leave requests belong to either a permanent Employee or a Wages/Labour
+  // worker — filter the fetched list by the active tab.
+  const tabLeaves = leaves.filter((lv) => (lv.employee?.employeeType || "PERMANENT") === employeeTypeTab);
+
+  const { page, setPage, pageItems, pageSize, total } = usePagination(tabLeaves, 10);
   useEffect(() => {
     setPage(1);
-  }, [statusFilter, selectedSiteId, setPage]);
+  }, [statusFilter, selectedSiteId, employeeTypeTab, setPage]);
 
   const handleDecision = async (id, decision) => {
     const decisionRemark = decision === "REJECTED" ? prompt("Reason for rejecting (optional):") || "" : "";
@@ -97,12 +109,14 @@ export default function Leave() {
         </div>
       </div>
 
+      <Tabs tabs={EMPLOYEE_TYPE_TABS} value={employeeTypeTab} onChange={setEmployeeTypeTab} />
+
       <div className="bg-white rounded-xl border border-navy-100 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-navy-300 border-b border-navy-100">
-                <th className="px-4 py-2 font-medium">Employee</th>
+                <th className="px-4 py-2 font-medium">{employeeTypeTab === "WAGES" ? "Labour" : "Employee"}</th>
                 <th className="px-4 py-2 font-medium">Site</th>
                 <th className="px-4 py-2 font-medium">Dates</th>
                 <th className="px-4 py-2 font-medium">Reason</th>
@@ -112,7 +126,7 @@ export default function Leave() {
             </thead>
             <tbody>
               {loading && <SkeletonTableRows rows={4} columns={isSuperAdmin ? 6 : 5} />}
-              {!loading && leaves.length === 0 && (
+              {!loading && tabLeaves.length === 0 && (
                 <tr>
                   <td colSpan={isSuperAdmin ? 6 : 5}>
                     <EmptyState
@@ -128,7 +142,9 @@ export default function Leave() {
                   <tr key={lv._id} className="border-b border-navy-50 last:border-0">
                     <td className="px-4 py-2 text-navy-700 font-medium">
                       {lv.employee?.name}
-                      <span className="block text-xs text-navy-300 font-mono">{lv.employee?.labourId}</span>
+                      <span className="block text-xs text-navy-300 font-mono">
+                        {employeeTypeTab === "WAGES" ? lv.employee?.labourId : lv.employee?.employeeCode}
+                      </span>
                     </td>
                     <td className="px-4 py-2 text-navy-500">{lv.site?.name}</td>
                     <td className="px-4 py-2 text-navy-500">
@@ -177,6 +193,7 @@ export default function Leave() {
       {requestOpen && (
         <RequestLeaveModal
           employees={employees}
+          employeeTypeTab={employeeTypeTab}
           onClose={() => setRequestOpen(false)}
           onCreated={() => {
             setRequestOpen(false);
@@ -188,7 +205,7 @@ export default function Leave() {
   );
 }
 
-function RequestLeaveModal({ employees, onClose, onCreated }) {
+function RequestLeaveModal({ employees, employeeTypeTab, onClose, onCreated }) {
   const toast = useToast();
   const { month, year } = currentMonthYear();
   const [form, setForm] = useState({
@@ -248,7 +265,7 @@ function RequestLeaveModal({ employees, onClose, onCreated }) {
               <option value="">Select employee</option>
               {employees.map((emp) => (
                 <option key={emp._id} value={emp._id}>
-                  {emp.name} ({emp.labourId})
+                  {emp.name} ({employeeTypeTab === "WAGES" ? emp.labourId : emp.employeeCode})
                 </option>
               ))}
             </Select>

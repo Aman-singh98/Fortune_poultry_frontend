@@ -1,8 +1,16 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { Search, X, PackageMinus, ClipboardList, PackageCheck, ArrowRightCircle } from "lucide-react";
+import { Search, X, Plus, PackageMinus, ClipboardList, PackageCheck, ArrowRightCircle } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
-import { getItemRequirements, processItemRequirement, getItemIssueSlips, getStock } from "../api/endpoints.js";
+import {
+  getItemRequirements,
+  createItemRequirement,
+  processItemRequirement,
+  getItemIssueSlips,
+  getStock,
+  getItems,
+  getSites,
+} from "../api/endpoints.js";
 import { SkeletonTableRows } from "../components/ui/Skeleton.jsx";
 import EmptyState from "../components/ui/EmptyState.jsx";
 import Select from "../components/ui/Select.jsx";
@@ -17,27 +25,37 @@ export default function ItemIssueSlips() {
   // Fulfilment (processing a requirement) is Admin's action — Super Admin
   // included the same way it has unrestricted access elsewhere in the app.
   const canProcess = user?.role === "SUPER_ADMIN" || user?.role === "ADMIN";
+  // Raising a new requirement uses the same createItemRequirement endpoint
+  // the backend already exposes — Admin (own site) and Super Admin (any site).
+  const canCreate = user?.role === "SUPER_ADMIN" || user?.role === "ADMIN";
 
   const [tab, setTab] = useState("requirements"); // "requirements" | "history"
   const [requirements, setRequirements] = useState([]);
   const [slips, setSlips] = useState([]);
   const [stock, setStock] = useState([]);
+  const [items, setItems] = useState([]);
+  const [sites, setSites] = useState([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [processTarget, setProcessTarget] = useState(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [reqRes, slipsRes, stockRes] = await Promise.all([
+      const [reqRes, slipsRes, stockRes, itemsRes, sitesRes] = await Promise.all([
         getItemRequirements(),
         getItemIssueSlips(),
         getStock(),
+        getItems({ isActive: true }),
+        getSites(),
       ]);
       setRequirements(reqRes.data.data);
       setSlips(slipsRes.data.data);
       setStock(stockRes.data.data);
+      setItems(itemsRes.data.data);
+      setSites(sitesRes.data.data);
     } catch (err) {
       toast.error(err?.response?.data?.message || "Could not load item requirements.");
     } finally {
@@ -99,9 +117,20 @@ export default function ItemIssueSlips() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold text-navy-700">Item issue slips</h1>
-        <p className="text-sm text-navy-300 mt-0.5">Fulfil an item requirement once stock is available; issuing reduces the running stock balance.</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold text-navy-700">Item issue slips</h1>
+          <p className="text-sm text-navy-300 mt-0.5">Fulfil an item requirement once stock is available; issuing reduces the running stock balance.</p>
+        </div>
+        {canCreate && (
+          <button
+            onClick={() => setCreateOpen(true)}
+            className="flex items-center gap-1.5 text-sm rounded-lg bg-navy-700 hover:bg-navy-900 text-white px-3 py-2"
+          >
+            <Plus size={16} />
+            Raise requirement
+          </button>
+        )}
       </div>
 
       <div className="flex gap-1 border-b border-navy-100">
@@ -269,6 +298,138 @@ export default function ItemIssueSlips() {
           }}
         />
       )}
+
+      {createOpen && (
+        <RaiseRequirementModal
+          items={items}
+          sites={sites}
+          user={user}
+          onClose={() => setCreateOpen(false)}
+          onSaved={() => {
+            setCreateOpen(false);
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function RaiseRequirementModal({ items, sites, user, onClose, onSaved }) {
+  const toast = useToast();
+  const isSiteScoped = user?.role === "ADMIN";
+  const [form, setForm] = useState({
+    department: "",
+    item: "",
+    quantity: "",
+    site: isSiteScoped ? user?.site?._id || user?.site || "" : "",
+  });
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (!form.department || !form.item || !form.quantity || !form.site) {
+      setError("Department, item, quantity and site are all required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await createItemRequirement({
+        department: form.department,
+        item: form.item,
+        quantity: Number(form.quantity),
+        site: form.site,
+      });
+      toast.success("Item requirement raised. It's ready to process from the Requirements tab.");
+      onSaved();
+    } catch (err) {
+      setError(err?.response?.data?.message || "Could not raise item requirement.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-30">
+      <div className="bg-white rounded-2xl w-full max-w-md p-5 sm:p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-semibold text-navy-700">Raise item requirement</h2>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-navy-50 text-navy-400">
+            <X size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-navy-700 mb-1">Department</label>
+            <input
+              value={form.department}
+              onChange={(e) => setForm({ ...form, department: e.target.value })}
+              placeholder="e.g. Farm Operations"
+              className="w-full text-sm border border-navy-100 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-navy-700 mb-1">Item</label>
+            <Select value={form.item} onChange={(e) => setForm({ ...form, item: e.target.value })} className="w-full">
+              <option value="">Select item</option>
+              {items.map((i) => (
+                <option key={i._id} value={i._id}>
+                  {i.name} ({i.itemCode})
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-navy-700 mb-1">Quantity</label>
+              <input
+                type="number"
+                min="0"
+                value={form.quantity}
+                onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+                className="w-full text-sm border border-navy-100 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-navy-700 mb-1">Site</label>
+              {isSiteScoped ? (
+                <input
+                  disabled
+                  value={user?.site?.name || "Your site"}
+                  className="w-full text-sm border border-navy-100 rounded-lg px-3 py-2 bg-navy-50 text-navy-400"
+                />
+              ) : (
+                <Select value={form.site} onChange={(e) => setForm({ ...form, site: e.target.value })} className="w-full">
+                  <option value="">Select site</option>
+                  {sites.map((s) => (
+                    <option key={s._id} value={s._id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </div>
+          </div>
+
+          {error && <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={onClose} className="text-sm px-3 py-2 rounded-lg text-navy-500 hover:bg-navy-50">
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="text-sm px-4 py-2 rounded-lg bg-navy-700 hover:bg-navy-900 text-white disabled:opacity-60"
+            >
+              {saving ? "Raising..." : "Raise requirement"}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

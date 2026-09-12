@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState, useCallback, useMemo } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { X, Plus, ChevronDown, ChevronUp, RefreshCw, Banknote, ClipboardList } from "lucide-react";
+import { X, Plus, ChevronDown, ChevronUp, RefreshCw, Banknote, ClipboardList, Zap } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useSiteScope } from "../context/SiteScopeContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
@@ -9,7 +9,13 @@ import { SkeletonTableRows } from "../components/ui/Skeleton.jsx";
 import EmptyState from "../components/ui/EmptyState.jsx";
 import Select from "../components/ui/Select.jsx";
 import Pagination from "../components/ui/Pagination.jsx";
+import Tabs from "../components/ui/Tabs.jsx";
 import usePagination from "../hooks/usePagination.js";
+
+const EMPLOYEE_TYPE_TABS = [
+  { value: "PERMANENT", label: "Employee" },
+  { value: "WAGES", label: "Wages & Labour" },
+];
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -40,6 +46,7 @@ export default function Salary() {
   const toast = useToast();
   const [searchParams] = useSearchParams();
   const [{ month, year }, setPeriod] = useState(() => periodFromSearchParams(searchParams));
+  const [employeeTypeTab, setEmployeeTypeTab] = useState("PERMANENT");
   const [employees, setEmployees] = useState([]);
   const [salaries, setSalaries] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -47,6 +54,7 @@ export default function Salary() {
   const [deductionTarget, setDeductionTarget] = useState(null); // { employee, salary }
   const [incentiveTarget, setIncentiveTarget] = useState(null); // { employee, salary }
   const [generatingId, setGeneratingId] = useState(null);
+  const [generatingAll, setGeneratingAll] = useState(false);
 
   const siteParam = isSuperAdmin && selectedSiteId ? { site: selectedSiteId } : {};
 
@@ -54,7 +62,7 @@ export default function Salary() {
     setLoading(true);
     try {
       const [empRes, salRes] = await Promise.all([
-        getEmployees({ ...siteParam, isActive: true }),
+        getEmployees({ ...siteParam, isActive: true, employeeType: employeeTypeTab }),
         getSalaries({ ...siteParam, month, year }),
       ]);
       setEmployees(empRes.data.data);
@@ -63,7 +71,7 @@ export default function Salary() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSiteId, month, year]);
+  }, [selectedSiteId, month, year, employeeTypeTab]);
 
   useEffect(() => {
     load();
@@ -72,7 +80,7 @@ export default function Salary() {
   const { page, setPage, pageItems, pageSize, total } = usePagination(employees, 10);
   useEffect(() => {
     setPage(1);
-  }, [month, year, selectedSiteId, setPage]);
+  }, [month, year, selectedSiteId, employeeTypeTab, setPage]);
 
   const salaryByEmployee = useMemo(() => {
     const map = {};
@@ -96,11 +104,35 @@ export default function Salary() {
     }
   };
 
+  // Generates (or regenerates) salary for every employee currently listed
+  // under the active tab, for the selected month/year, in one click.
+  const handleGenerateAll = async () => {
+    if (employees.length === 0) return;
+    setGeneratingAll(true);
+    let succeeded = 0;
+    let failed = 0;
+    for (const emp of employees) {
+      try {
+        await generateSalary({ employee: emp._id, month, year });
+        succeeded += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    setGeneratingAll(false);
+    if (failed === 0) {
+      toast.success(`Salary generated for all ${succeeded} employee${succeeded === 1 ? "" : "s"}.`);
+    } else {
+      toast.error(`Generated for ${succeeded} employee${succeeded === 1 ? "" : "s"}, ${failed} failed.`);
+    }
+    load();
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-semibold text-navy-700">Salary</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Link
             to="/salary-ledger"
             className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-navy-100 text-navy-600 hover:bg-navy-50"
@@ -124,15 +156,26 @@ export default function Salary() {
               <option key={y} value={y}>{y}</option>
             ))}
           </Select>
+          <button
+            onClick={handleGenerateAll}
+            disabled={generatingAll || loading || employees.length === 0}
+            title="Generate salary for every employee shown below, for the selected month/year"
+            className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-accent-500 hover:bg-accent-700 text-white disabled:opacity-60"
+          >
+            <Zap size={14} className={generatingAll ? "animate-pulse" : ""} />
+            {generatingAll ? "Generating..." : "Generate all salary"}
+          </button>
         </div>
       </div>
+
+      <Tabs tabs={EMPLOYEE_TYPE_TABS} value={employeeTypeTab} onChange={setEmployeeTypeTab} />
 
       <div className="bg-white rounded-xl border border-navy-100 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-navy-300 border-b border-navy-100">
-                <th className="px-4 py-2 font-medium">Employee</th>
+                <th className="px-4 py-2 font-medium">{employeeTypeTab === "WAGES" ? "Labour" : "Employee"}</th>
                 <th className="px-4 py-2 font-medium">Site</th>
                 <th className="px-4 py-2 font-medium">Gross earning</th>
                 <th className="px-4 py-2 font-medium">Incentives</th>
@@ -169,7 +212,9 @@ export default function Salary() {
                             {salary && (isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
                             {emp.name}
                           </button>
-                          <span className="block text-xs text-navy-300 font-mono">{emp.labourId}</span>
+                          <span className="block text-xs text-navy-300 font-mono">
+                            {employeeTypeTab === "WAGES" ? emp.labourId : emp.employeeCode}
+                          </span>
                         </td>
                         <td className="px-4 py-2 text-navy-500">{emp.site?.name}</td>
                         <td className="px-4 py-2 text-navy-700">
@@ -279,7 +324,6 @@ function SalaryBreakdown({ salary }) {
         <dl className="grid grid-cols-2 gap-y-1.5 text-sm text-navy-600 mb-4">
           <dt>Base wage</dt><dd className="text-right font-medium">₹{salary.earnings.baseWage.toFixed(2)}</dd>
           <dt>Overtime pay</dt><dd className="text-right font-medium">₹{salary.earnings.overtimePay.toFixed(2)}</dd>
-          <dt>Egg/bird commission</dt><dd className="text-right font-medium">₹{salary.earnings.salesCommission.toFixed(2)}</dd>
           {salary.earnings.travelAllowance > 0 && (
             <>
               <dt>Travel allowance</dt>
